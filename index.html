@@ -766,7 +766,7 @@ body > * { position: relative; z-index: 1; }
     </div>
     <div class="hdr-right">
       <div class="hdr-time">UPDATED <em id="upd-time">--:--:--</em></div>
-      <button class="hdr-refresh-btn" onclick="refreshData()">↺ REFRESH</button>
+      <button class="hdr-refresh-btn" id="hdr-refresh-btn" onclick="manualRefresh()">↺ REFRESH</button>
     </div>
   </div>
 
@@ -1569,6 +1569,39 @@ async function refreshData() {
 
 function setSbText(t) {
   document.getElementById('sb-txt').textContent = t;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// REFRESH BUTTON COOLDOWN
+// Prevents hammering the API — 30 second lockout
+// after each manual refresh. Shows countdown in button.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const REFRESH_COOLDOWN_S = 30;
+let _refreshCooldownTimer = null;
+
+function manualRefresh() {
+  const btn = document.getElementById('hdr-refresh-btn');
+  if (btn.disabled) return;
+
+  refreshData();
+
+  // Lock button for REFRESH_COOLDOWN_S seconds
+  btn.disabled = true;
+  let remaining = REFRESH_COOLDOWN_S;
+
+  const tick = () => {
+    btn.textContent = `REFRESH (${remaining}s)`;
+    if (remaining <= 0) {
+      btn.disabled = false;
+      btn.textContent = 'REFRESH';
+      clearInterval(_refreshCooldownTimer);
+      _refreshCooldownTimer = null;
+      return;
+    }
+    remaining--;
+  };
+  tick();
+  _refreshCooldownTimer = setInterval(tick, 1000);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
