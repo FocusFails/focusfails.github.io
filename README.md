@@ -1,2 +1,2 @@
 # focusfails.github.io
-Hosting Generator Monitoring Website
+Generator Monitoring Website
