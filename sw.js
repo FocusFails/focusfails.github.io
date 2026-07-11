@@ -7,6 +7,8 @@ const CACHE = 'genmonitor-v1';
 // Files to cache on install — the app shell
 const SHELL = [
   './dashboard.html',
+  './style.css',
+  './script.js',
   './manifest.json',
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
   'https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&display=swap',
