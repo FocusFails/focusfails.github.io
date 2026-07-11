@@ -171,16 +171,23 @@ async function fetchAllData() {
     .filter(r => r && r.length >= 1 && r[0])   // just needs a timestamp — trailing blank
                                                 // cells (e.g. slave 2 offline) get trimmed
                                                 // by the Sheets API and must not drop the row
-    .map(r => ({
-      timestamp:   r[0] || '',
-      nepaliYear:  parseInt(r[1])  || 0,
-      nepaliMonth: (r[2] || '').trim(),
-      nepaliDay:   parseInt(r[3])  || 0,
-      p1: parseFloat(r[4]) || 0,
-      p2: parseFloat(r[5]) || 0,
-      e1: parseFloat(r[6]) || 0,
-      e2: parseFloat(r[7]) || 0,
-    }));
+    .map(r => {
+      const isBlank = v => v === undefined || v === null || String(v).trim() === '';
+      return {
+        timestamp:   r[0] || '',
+        nepaliYear:  parseInt(r[1])  || 0,
+        nepaliMonth: (r[2] || '').trim(),
+        nepaliDay:   parseInt(r[3])  || 0,
+        p1: parseFloat(r[4]) || 0,
+        p2: parseFloat(r[5]) || 0,
+        e1: parseFloat(r[6]) || 0,
+        e2: parseFloat(r[7]) || 0,
+        p1Missing: isBlank(r[4]),
+        p2Missing: isBlank(r[5]),
+        e1Missing: isBlank(r[6]),
+        e2Missing: isBlank(r[7]),
+      };
+    });
 
   const remarks = rmkRaw
     .filter(r => r.length >= 2)
@@ -287,8 +294,8 @@ function getDummyConfig() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // RING UPDATER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function updateRing(n, power, maxPower, energy) {
-  const running = power > 0;
+function updateRing(n, power, maxPower, energy, missing) {
+  const running = !missing && power > 0;
   const card    = document.getElementById(`u${n}-card`);
   const badge   = document.getElementById(`u${n}-badge`);
   const arc     = document.getElementById(`u${n}-arc`);
@@ -299,16 +306,17 @@ function updateRing(n, power, maxPower, energy) {
 
   // Card state
   card.classList.toggle('running', running);
-  card.classList.toggle('stopped', !running);
-  badge.className = `unit-badge ${running ? 'running' : 'stopped'}`;
-  badge.textContent = running ? 'RUNNING' : 'STOPPED';
+  card.classList.toggle('stopped', !running && !missing);
+  card.classList.toggle('nodata', missing);
+  badge.className = `unit-badge ${missing ? 'nodata' : (running ? 'running' : 'stopped')}`;
+  badge.textContent = missing ? 'NO DATA' : (running ? 'RUNNING' : 'STOPPED');
 
   // Arc geometry  (r=68, circ≈427.26)
   const circ = 2 * Math.PI * 68;
-  const pct  = Math.min(Math.max(power / maxPower, 0), 1);
+  const pct  = missing ? 0 : Math.min(Math.max(power / maxPower, 0), 1);
   const fill = pct * circ;
 
-  const color = running ? '#00e5a0' : '#ff4444';
+  const color = missing ? '#ff8c00' : (running ? '#00e5a0' : '#ff4444');
   arc.setAttribute('stroke', color);
   arc.setAttribute('stroke-dasharray', `${fill.toFixed(2)} ${(circ-fill).toFixed(2)}`);
   arc.style.filter = running
@@ -316,14 +324,14 @@ function updateRing(n, power, maxPower, energy) {
     : 'none';
   scanner.setAttribute('stroke', color);
 
-  // Center text
-  valEl.textContent = power.toLocaleString();
-  valEl.setAttribute('fill', running ? '#bdd0e0' : '#ff4444');
-  pctEl.textContent = `${(pct*100).toFixed(1)}%`;
-  pctEl.setAttribute('fill', running ? '#4a6278' : '#ff4444');
+  // Center text — X when the column is blank (comms failure), a real number otherwise
+  valEl.textContent = missing ? 'X' : power.toLocaleString();
+  valEl.setAttribute('fill', missing ? '#ff8c00' : (running ? '#bdd0e0' : '#ff4444'));
+  pctEl.textContent = missing ? '—' : `${(pct*100).toFixed(1)}%`;
+  pctEl.setAttribute('fill', missing ? '#ff8c00' : (running ? '#4a6278' : '#ff4444'));
 
   // Energy
-  engEl.textContent = energy.toLocaleString();
+  engEl.textContent = missing ? 'X' : energy.toLocaleString();
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -386,16 +394,58 @@ function updateProgress(rows, month, year, day, cfg) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// REMARKS
+// NOTICES  (ops remarks + comms-failure warnings)
+// Re-evaluated on every refresh (not just page load) so a remark added
+// or a comms fault appearing mid-session shows up on the next auto-refresh.
+// A dismissed notice won't reappear on its own — only a *new* or *changed*
+// notice (different key) reopens the banner.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function applyRemarks(remarks) {
-  const today = new Date();
-  const pad = n => String(n).padStart(2,'0');
-  const key = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
-  const hit  = remarks.find(r => r.date === key);
-  if (hit && hit.remark) {
-    document.getElementById('rmk-msg').textContent = hit.remark;
-    document.getElementById('rmk-banner').classList.add('show');
+let _lastBannerKey = null;
+
+function applyNotices(remarks, u1Missing, u2Missing) {
+  const banner  = document.getElementById('rmk-banner');
+  const labelEl = banner.querySelector('.remark-label');
+  const msgEl   = document.getElementById('rmk-msg');
+
+  const missingUnits = [];
+  if (u1Missing) missingUnits.push(1);
+  if (u2Missing) missingUnits.push(2);
+
+  let label, msg, bannerKey, isWarning = false;
+
+  if (missingUnits.length) {
+    // Comms failure takes priority over an ops remark
+    isWarning = true;
+    label = 'Comms Warning';
+    msg = missingUnits.length === 2
+      ? 'Data from Slave 1 and Slave 2 is not being read. Check meter wiring and power.'
+      : `Data from Slave ${missingUnits[0]} is not being read. Check meter wiring and power.`;
+    bannerKey = `warn:${missingUnits.join(',')}`;
+  } else {
+    const today = new Date();
+    const pad   = n => String(n).padStart(2,'0');
+    const key   = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+    const hit   = remarks.find(r => r.date === key);
+    if (hit && hit.remark) {
+      label = 'Ops Notice';
+      msg = hit.remark;
+      bannerKey = `remark:${key}:${hit.remark}`;
+    }
+  }
+
+  if (!bannerKey) {
+    // Nothing active right now — clear tracking so a future notice always shows
+    _lastBannerKey = null;
+    banner.classList.remove('show');
+    return;
+  }
+
+  if (bannerKey !== _lastBannerKey) {
+    labelEl.textContent = label;
+    msgEl.textContent   = msg;
+    banner.classList.toggle('warning', isWarning);
+    banner.classList.add('show');
+    _lastBannerKey = bannerKey;
   }
 }
 
@@ -534,16 +584,19 @@ async function refreshData() {
     const maxPer2 = Math.min(period ? period.maxPerGenKw : 9999, cfg.unit2MaxAbsKw);
 
     // Rings
-    updateRing(1, latest.p1, maxPer1, latest.e1);
-    updateRing(2, latest.p2, maxPer2, latest.e2);
+    const u1Missing = latest.p1Missing || latest.e1Missing;
+    const u2Missing = latest.p2Missing || latest.e2Missing;
+    updateRing(1, latest.p1, maxPer1, latest.e1, u1Missing);
+    updateRing(2, latest.p2, maxPer2, latest.e2, u2Missing);
 
     // Total panel
-    const totalP = latest.p1 + latest.p2;
     const mwhFmt = v => `${(v/1e6).toFixed(3)} MWh`;
-    document.getElementById('tc-power').textContent    = totalP.toLocaleString();
-    document.getElementById('tc-e1').textContent       = mwhFmt(latest.e1);
-    document.getElementById('tc-e2').textContent       = mwhFmt(latest.e2);
-    document.getElementById('tc-combined').textContent = mwhFmt(latest.e1 + latest.e2);
+    document.getElementById('tc-power').textContent    = (u1Missing || u2Missing)
+      ? 'X' : (latest.p1 + latest.p2).toLocaleString();
+    document.getElementById('tc-e1').textContent       = u1Missing ? 'X' : mwhFmt(latest.e1);
+    document.getElementById('tc-e2').textContent       = u2Missing ? 'X' : mwhFmt(latest.e2);
+    document.getElementById('tc-combined').textContent = (u1Missing || u2Missing)
+      ? 'X' : mwhFmt(latest.e1 + latest.e2);
 
     // Chart — today's data, 00:00 to 24:00 only
     updateChart(rows);
@@ -551,16 +604,17 @@ async function refreshData() {
     // Progress — period-aware
     updateProgress(rows, latest.nepaliMonth, latest.nepaliYear, latest.nepaliDay, cfg);
 
-    // Remarks — only evaluate once per page load, not on every refresh
-    if (!window._remarksApplied) {
-      applyRemarks(remarks);
-      window._remarksApplied = true;
-    }
+    // Notices — re-evaluated every refresh so new remarks and comms
+    // failures both surface without needing a full page reload
+    applyNotices(remarks, u1Missing, u2Missing);
 
     // Status bar
     document.getElementById('sb-date').textContent =
       `${latest.nepaliMonth} ${latest.nepaliDay}, ${latest.nepaliYear} BS`;
-    const runCount = [latest.p1, latest.p2].filter(v => v > 0).length;
+    const runCount = [
+      !u1Missing && latest.p1 > 0,
+      !u2Missing && latest.p2 > 0,
+    ].filter(Boolean).length;
     document.getElementById('sb-units').textContent = `RUNNING: ${runCount}/2`;
 
     // Last-updated timestamp

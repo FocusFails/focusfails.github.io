@@ -266,6 +266,16 @@ body > * { position: relative; z-index: 1; }
 }
 .remark-close:hover { opacity: 1; }
 
+/* Comms-failure variant — a slave isn't reporting data */
+.remark-banner.warning {
+  background: rgba(255, 68, 68, 0.08);
+  border-bottom: 1px solid rgba(255, 68, 68, 0.3);
+}
+.remark-banner.warning .remark-icon,
+.remark-banner.warning .remark-label,
+.remark-banner.warning .remark-msg,
+.remark-banner.warning .remark-close { color: var(--red); }
+
 /* ─── MAIN GRID ─── */
 .main {
   flex: 1;
@@ -304,6 +314,9 @@ body > * { position: relative; z-index: 1; }
 .unit-card.stopped::after {
   background: var(--red);
 }
+.unit-card.nodata::after {
+  background: var(--orange);
+}
 
 .unit-hdr {
   display: flex; align-items: center; justify-content: space-between;
@@ -322,6 +335,7 @@ body > * { position: relative; z-index: 1; }
 }
 .unit-badge.running { color: var(--green); }
 .unit-badge.stopped { color: var(--red); animation: blink-badge 1.2s ease-in-out infinite; }
+.unit-badge.nodata  { color: var(--orange); animation: blink-badge 1.2s ease-in-out infinite; }
 
 @keyframes blink-badge {
   0%, 100% { opacity: 1; }
